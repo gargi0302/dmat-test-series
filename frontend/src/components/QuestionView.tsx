@@ -133,6 +133,10 @@ export function OptionGrid({
         numeric={question.option_type === "numeric"}
         correctAnswer={correctAnswer}
         revealCorrectness={revealCorrectness}
+        // Latin Square questions always ask for exactly one letter/number/
+        // symbol, for the single cell the source PDF marks with "?" — label
+        // the input to match instead of a generic, disconnected text box.
+        label={question.module === "latin_squares" ? "?" : undefined}
       />
     );
   }
@@ -239,26 +243,37 @@ function MultiVariableInput({
 }
 
 function FreeResponseInput({
-  value, onChange, numeric, correctAnswer, revealCorrectness,
+  value, onChange, numeric, correctAnswer, revealCorrectness, label,
 }: {
   value: string | null;
   onChange?: (v: string) => void;
   numeric?: boolean;
   correctAnswer?: string | null;
   revealCorrectness?: boolean;
+  /** Ties the input to a specific marker in the source image (e.g. "?" for
+   * a Latin Square's single highlighted cell) instead of a generic,
+   * disconnected text box. */
+  label?: string;
 }) {
   const interactive = !!onChange;
   return (
     <div className="space-y-2">
-      <input
-        type={numeric ? "text" : "text"}
-        inputMode={numeric ? "numeric" : "text"}
-        disabled={!interactive}
-        value={value ?? ""}
-        onChange={(e) => onChange?.(e.target.value)}
-        placeholder={numeric ? "Enter numeric answer" : "Enter your answer"}
-        className="w-full max-w-xs px-3 py-2 rounded-md border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-80"
-      />
+      <div className="flex items-center gap-2">
+        {label && (
+          <span className="flex-shrink-0 h-9 w-9 rounded-md bg-[var(--incorrect-soft)] text-[var(--incorrect)] flex items-center justify-center text-base font-bold">
+            {label}
+          </span>
+        )}
+        <input
+          type={numeric ? "text" : "text"}
+          inputMode={numeric ? "numeric" : "text"}
+          disabled={!interactive}
+          value={value ?? ""}
+          onChange={(e) => onChange?.(e.target.value)}
+          placeholder={label ? `Answer for ${label}` : numeric ? "Enter numeric answer" : "Enter your answer"}
+          className="w-full max-w-xs px-3 py-2 rounded-md border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-80"
+        />
+      </div>
       {revealCorrectness && (
         <p className="text-sm">
           <span className="text-[var(--text-muted)]">Correct answer: </span>
