@@ -1,0 +1,13 @@
+fastapi>=0.141
+uvicorn[standard]>=0.52
+sqlalchemy>=2.0
+pydantic>=2.13
+pymupdf>=1.28
+pdfplumber>=0.11
+pillow>=12.0
+aiofiles>=25.1
+python-multipart>=0.0.32
+
+# Optional (OCR fallback) — only used if the `tesseract` binary is also
+# installed on the system. Uncomment to enable:
+# pytesseract>=0.3

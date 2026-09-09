@@ -1,0 +1,106 @@
+@import "tailwindcss";
+@import "katex/dist/katex.min.css";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+:root {
+  color-scheme: light;
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #f0f1f4;
+  --border: #dde1e7;
+  --text: #14181f;
+  --text-muted: #5b6472;
+  --accent: #2452e8;
+  --accent-hover: #1c3fc0;
+  --accent-soft: #e7edff;
+  --correct: #16813d;
+  --correct-soft: #e5f6ea;
+  --incorrect: #d1263f;
+  --incorrect-soft: #fce8ea;
+  --warning: #b7791f;
+  --warning-soft: #fdf3e0;
+  --marked: #7c3aed;
+  --marked-soft: #efe6fd;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0f1216;
+    --surface: #171b21;
+    --surface-2: #1e232b;
+    --border: #2b313b;
+    --text: #eef1f5;
+    --text-muted: #9aa4b2;
+    --accent: #5b83ff;
+    --accent-hover: #7b9bff;
+    --accent-soft: #1c2740;
+    --correct: #3ecb75;
+    --correct-soft: #123122;
+    --incorrect: #ff6b7a;
+    --incorrect-soft: #3a161c;
+    --warning: #e0ab4f;
+    --warning-soft: #3a2c10;
+    --marked: #b18cff;
+    --marked-soft: #2a2044;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f1216;
+  --surface: #171b21;
+  --surface-2: #1e232b;
+  --border: #2b313b;
+  --text: #eef1f5;
+  --text-muted: #9aa4b2;
+  --accent: #5b83ff;
+  --accent-hover: #7b9bff;
+  --accent-soft: #1c2740;
+  --correct: #3ecb75;
+  --correct-soft: #123122;
+  --incorrect: #ff6b7a;
+  --incorrect-soft: #3a161c;
+  --warning: #e0ab4f;
+  --warning-soft: #3a2c10;
+  --marked: #b18cff;
+  --marked-soft: #2a2044;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+img {
+  max-width: 100%;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+/* Crisp rendering for source-PDF question/option crops — never scale up beyond native res */
+.pdf-crop {
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+  max-width: 100%;
+  height: auto;
+}
