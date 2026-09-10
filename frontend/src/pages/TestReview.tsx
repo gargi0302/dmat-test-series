@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "@/api/client";
-import type { TestDetail } from "@/types";
+import type { AnswerKeyApplyResult, TestDetail } from "@/types";
 import { MODULE_LABELS } from "@/types";
 import { QuestionVisual, OptionGrid, MultiPartOptionGrid } from "@/components/QuestionView";
 import { formatMMSS } from "@/lib/time";
@@ -18,11 +18,32 @@ export default function TestReview() {
   const [test, setTest] = useState<TestDetail | null>(null);
   const [index, setIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState<AnswerKeyApplyResult | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!testId) return;
     api.getTest(testId).then(setTest).catch((e) => setError(e.message));
   }, [testId]);
+
+  const onAnswerKeyChosen = async (file: File | undefined) => {
+    if (!file || !testId) return;
+    setUploading(true);
+    setUploadError(null);
+    setUploadResult(null);
+    try {
+      const result = await api.applyAnswerKey(testId, file);
+      setTest(result.test);
+      setUploadResult(result);
+    } catch (e) {
+      setUploadError((e as Error).message);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
 
   if (error) return <div className="max-w-3xl mx-auto px-6 py-10 text-[var(--incorrect)]">{error}</div>;
   if (!test) return <div className="max-w-3xl mx-auto px-6 py-10 text-[var(--text-muted)]">Loading…</div>;
@@ -34,8 +55,46 @@ export default function TestReview() {
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
-      <Link to={`/tests/${test.id}/results`} className="text-sm text-[var(--text-muted)] hover:text-[var(--text)]">← Results</Link>
-      <h1 className="text-2xl font-bold tracking-tight mt-2 mb-6">Answer Review — {MODULE_LABELS[test.module]}</h1>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <Link to={`/tests/${test.id}/results`} className="text-sm text-[var(--text-muted)] hover:text-[var(--text)]">← Results</Link>
+        <div className="flex items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/pdf"
+            className="hidden"
+            onChange={(e) => onAnswerKeyChosen(e.target.files?.[0])}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="px-3 py-1.5 rounded-md border border-[var(--border)] text-sm font-medium hover:bg-[var(--surface-2)] disabled:opacity-50"
+          >
+            {uploading ? "Parsing…" : "Upload Answer Key PDF"}
+          </button>
+        </div>
+      </div>
+      <h1 className="text-2xl font-bold tracking-tight mt-2 mb-3">Answer Review — {MODULE_LABELS[test.module]}</h1>
+
+      {uploadError && (
+        <div className="mb-4 p-3 rounded-lg border border-[var(--incorrect)] bg-[var(--incorrect-soft)] text-sm text-[var(--incorrect)]">
+          {uploadError}
+        </div>
+      )}
+      {uploadResult && (
+        <div className="mb-4 p-3 rounded-lg border border-[var(--correct)] bg-[var(--correct-soft)] text-sm">
+          <p className="font-medium">
+            Answer key applied: {uploadResult.applied} question{uploadResult.applied === 1 ? "" : "s"} matched and graded.
+          </p>
+          {(uploadResult.already_set > 0 || uploadResult.skipped_multi > 0 || uploadResult.unmatched > 0) && (
+            <p className="text-[var(--text-muted)] mt-1">
+              {uploadResult.already_set > 0 && `${uploadResult.already_set} already had an answer (left unchanged). `}
+              {uploadResult.skipped_multi > 0 && `${uploadResult.skipped_multi} need per-part/per-variable answers — edit those manually. `}
+              {uploadResult.unmatched > 0 && `${uploadResult.unmatched} couldn't be confidently matched to this key.`}
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_260px] gap-6">
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5">

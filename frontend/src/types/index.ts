@@ -115,6 +115,14 @@ export interface TestDetail extends Test {
   questions: Question[];
 }
 
+export interface AnswerKeyApplyResult {
+  applied: number;
+  already_set: number;
+  skipped_multi: number;
+  unmatched: number;
+  test: TestDetail;
+}
+
 export interface ScoreSummary {
   score: number;
   total: number;

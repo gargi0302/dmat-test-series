@@ -162,6 +162,21 @@ class TestDetail(TestOut):
     questions: list[QuestionOut]
 
 
+class AnswerKeyApplyResult(BaseModel):
+    """Result of retroactively matching an uploaded answer-key PDF against a
+    test's questions. `applied` questions had their correct_answer resolved
+    and set (in the question bank, benefiting every test that reuses them —
+    not just this one) and this test's attempts re-graded against it.
+    Nothing here overwrites an answer a question already had, and nothing
+    is ever applied below high/medium confidence — same never-guess rule as
+    a normal import."""
+    applied: int
+    already_set: int
+    skipped_multi: int
+    unmatched: int
+    test: TestDetail
+
+
 class AttemptPatch(BaseModel):
     """Autosave payload for one question within an in-progress test.
     elapsed_seconds (computed client-side from timestamps, never a decrementing

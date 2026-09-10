@@ -1,14 +1,17 @@
 import json
 import random
 import time
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+import pdfplumber
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from ..db import get_db
+from ..db import get_db, SOURCE_PDF_DIR
 from .. import models, schemas
 from ..services import scoring
+from ..services.pdf_parser import answer_key as ak
 
 router = APIRouter()
 
@@ -255,3 +258,113 @@ def get_results(test_id: str, db: Session = Depends(get_db)):
     if test.status != "completed":
         raise HTTPException(status_code=400, detail="Test is not completed yet")
     return _score_summary(db, test)
+
+
+@router.post("/{test_id}/answer-key", response_model=schemas.AnswerKeyApplyResult)
+def apply_answer_key(test_id: str, answer_key_pdf: UploadFile = File(...), db: Session = Depends(get_db)):
+    """Retroactively matches an uploaded answer-key PDF against this test's
+    questions by their original source_question_number, so a test taken from
+    a keyless PDF can still get a real side-by-side comparison afterwards.
+
+    Same rules as a normal import: an answer is only ever applied at
+    high/medium confidence (never guessed), and a question that already has
+    a correct_answer is left untouched rather than overwritten. Applying an
+    answer updates the *question bank* entry (so every other test reusing
+    that question benefits too), then re-grades this test's attempts against
+    the refreshed answers."""
+    test = db.get(models.Test, test_id)
+    if not test:
+        raise HTTPException(status_code=404, detail="Test not found")
+
+    dest_dir = SOURCE_PDF_DIR
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = Path(answer_key_pdf.filename or "answer_key.pdf").name
+    dest = dest_dir / f"answerkey_{test_id}_{safe_name}"
+    with dest.open("wb") as f:
+        f.write(answer_key_pdf.file.read())
+
+    with pdfplumber.open(dest) as pdf:
+        full_text = "\n".join((p.extract_text() or "") for p in pdf.pages)
+    key_entries = ak.parse_answer_key_text(full_text)
+
+    questions = db.query(models.Question).filter(models.Question.id.in_(test.question_ids)).all()
+    by_id = {q.id: q for q in questions}
+
+    applied = already_set = skipped_multi = unmatched = 0
+    for question in questions:
+        if question.parts:
+            # No known key format carries per-part answers — needs a human
+            # to read the key and fill each part in manually.
+            skipped_multi += 1
+            continue
+
+        parsed_entry = key_entries.get(question.source_question_number)
+
+        if question.variables:
+            # A multi-variable question (e.g. "A = ? • B = ? • C = ? • D = ?")
+            # only ever gets ONE variable's value from a "Qn: X = value" key
+            # entry — apply just that one, leaving the rest open, rather than
+            # skipping the whole question or guessing the others. Grading
+            # below only marks it right/wrong once every variable is known.
+            existing = json.loads(question.correct_answer) if question.correct_answer else {}
+            target = (parsed_entry or {}).get("variable")
+            matched_var = next((v for v in question.variables if target and v.upper() == target.upper()), None)
+            if not matched_var:
+                unmatched += 1
+                continue
+            if matched_var in existing:
+                already_set += 1
+                continue
+            value, confidence, detected_raw = ak.resolve_answer("text", None, parsed_entry, question.question_text)
+            if value is None:
+                unmatched += 1
+                continue
+            existing[matched_var] = value
+            question.correct_answer = json.dumps(existing)
+            question.confidence = confidence
+            question.detected_answer_raw = detected_raw
+            applied += 1
+            continue
+
+        if question.correct_answer:
+            already_set += 1
+            continue
+        valid_keys = [o["key"] for o in question.options] if question.options else None
+        correct_answer, confidence, detected_raw = ak.resolve_answer(
+            question.option_type, valid_keys, parsed_entry, question.question_text
+        )
+        if correct_answer is not None:
+            question.correct_answer = correct_answer
+            question.confidence = confidence
+            question.detected_answer_raw = detected_raw
+            applied += 1
+        else:
+            if detected_raw:
+                question.detected_answer_raw = detected_raw
+            unmatched += 1
+    db.commit()
+
+    # Re-grade this test's attempts against whatever just got resolved.
+    attempts = db.query(models.Attempt).filter(models.Attempt.test_id == test_id).all()
+    for attempt in attempts:
+        question = by_id.get(attempt.question_id)
+        if not question or question.parts:
+            continue  # no per-part key format exists — snapshot already reflects the original state
+        attempt.correct_answer_snapshot = question.correct_answer
+        if question.variables:
+            known = json.loads(question.correct_answer) if question.correct_answer else {}
+            if len(known) < len(question.variables):
+                # Partial answer — show it in the review, but never claim a
+                # verdict on variables that are still unknown.
+                attempt.is_correct = None
+                continue
+        attempt.is_correct = scoring.grade(attempt.selected_answer, attempt.correct_answer_snapshot)
+    if test.status == "completed":
+        test.score = sum(1 for a in attempts if a.is_correct)
+    db.commit()
+    db.refresh(test)
+
+    return schemas.AnswerKeyApplyResult(
+        applied=applied, already_set=already_set, skipped_multi=skipped_multi, unmatched=unmatched,
+        test=_detail(db, test),
+    )

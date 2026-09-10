@@ -1,5 +1,5 @@
 import type {
-  DashboardData, ImportBatch, ImportBatchDetail, ModuleId, Question,
+  AnswerKeyApplyResult, DashboardData, ImportBatch, ImportBatchDetail, ModuleId, Question,
   QuestionStatus, QuestionWithStats, ScoreSummary, Settings, Test, TestDetail, TestMode,
 } from "@/types";
 
@@ -77,4 +77,9 @@ export const api = {
   abandonTest: (id: string) => request<Test>(`/tests/${id}/abandon`, { method: "POST" }),
   getResults: (id: string) => request<ScoreSummary>(`/tests/${id}/results`),
   deleteTest: (id: string) => request<void>(`/tests/${id}`, { method: "DELETE" }),
+  applyAnswerKey: (testId: string, answerKeyPdf: File) => {
+    const fd = new FormData();
+    fd.append("answer_key_pdf", answerKeyPdf);
+    return request<AnswerKeyApplyResult>(`/tests/${testId}/answer-key`, { method: "POST", body: fd });
+  },
 };
