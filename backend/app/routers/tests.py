@@ -268,10 +268,13 @@ def apply_answer_key(test_id: str, answer_key_pdf: UploadFile = File(...), db: S
 
     Same rules as a normal import: an answer is only ever applied at
     high/medium confidence (never guessed), and a question that already has
-    a correct_answer is left untouched rather than overwritten. Applying an
-    answer updates the *question bank* entry (so every other test reusing
-    that question benefits too), then re-grades this test's attempts against
-    the refreshed answers."""
+    a correct_answer is left untouched rather than overwritten. A multi-part
+    question (e.g. "Matrix 5" + "Matrix 6") is resolved from a per-part
+    answer-key row when the key provides one, part by part, leaving any
+    part the row doesn't cover for manual review. Applying an answer updates
+    the *question bank* entry (so every other test reusing that question
+    benefits too), then re-grades this test's attempts against the
+    refreshed answers."""
     test = db.get(models.Test, test_id)
     if not test:
         raise HTTPException(status_code=404, detail="Test not found")
@@ -286,6 +289,7 @@ def apply_answer_key(test_id: str, answer_key_pdf: UploadFile = File(...), db: S
     with pdfplumber.open(dest) as pdf:
         full_text = "\n".join((p.extract_text() or "") for p in pdf.pages)
     key_entries = ak.parse_answer_key_text(full_text)
+    multi_part_key_cache: dict[int, dict[int, list[str]]] = {}
 
     questions = db.query(models.Question).filter(models.Question.id.in_(test.question_ids)).all()
     by_id = {q.id: q for q in questions}
@@ -293,9 +297,40 @@ def apply_answer_key(test_id: str, answer_key_pdf: UploadFile = File(...), db: S
     applied = already_set = skipped_multi = unmatched = 0
     for question in questions:
         if question.parts:
-            # No known key format carries per-part answers — needs a human
-            # to read the key and fill each part in manually.
-            skipped_multi += 1
+            if all(p.get("correct_answer") for p in question.parts):
+                already_set += 1
+                continue
+            num_parts = len(question.parts)
+            if num_parts < 2:
+                skipped_multi += 1
+                continue
+            if num_parts not in multi_part_key_cache:
+                multi_part_key_cache[num_parts] = ak.parse_multi_part_answer_key_text(full_text, num_parts)
+            multi_row = multi_part_key_cache[num_parts].get(question.source_question_number)
+            if not multi_row:
+                unmatched += 1
+                continue
+            new_parts = []
+            any_resolved = False
+            for gi, part in enumerate(question.parts):
+                part = dict(part)
+                if not part.get("correct_answer"):
+                    valid_keys = [o["key"] for o in part.get("options") or []]
+                    value, _confidence, detected_raw = ak.resolve_answer(
+                        "mcq", valid_keys, {"value": multi_row[gi], "variable": None},
+                    )
+                    if value is not None:
+                        part["correct_answer"] = value
+                        part["detected_answer_raw"] = detected_raw
+                        any_resolved = True
+                new_parts.append(part)
+            if not any_resolved:
+                unmatched += 1
+                continue
+            question.parts = new_parts
+            if all(p.get("correct_answer") for p in new_parts):
+                question.confidence = "high"
+            applied += 1
             continue
 
         parsed_entry = key_entries.get(question.source_question_number)
@@ -348,8 +383,17 @@ def apply_answer_key(test_id: str, answer_key_pdf: UploadFile = File(...), db: S
     attempts = db.query(models.Attempt).filter(models.Attempt.test_id == test_id).all()
     for attempt in attempts:
         question = by_id.get(attempt.question_id)
-        if not question or question.parts:
-            continue  # no per-part key format exists — snapshot already reflects the original state
+        if not question:
+            continue
+        if question.parts:
+            # Same {label: choice} snapshot shape used when the test was
+            # created — some labels may still be None if a part's answer
+            # wasn't resolved, which scoring.grade treats as ungraded.
+            attempt.correct_answer_snapshot = json.dumps(
+                {p["label"]: p.get("correct_answer") for p in question.parts}
+            )
+            attempt.is_correct = scoring.grade(attempt.selected_answer, attempt.correct_answer_snapshot)
+            continue
         attempt.correct_answer_snapshot = question.correct_answer
         if question.variables:
             known = json.loads(question.correct_answer) if question.correct_answer else {}

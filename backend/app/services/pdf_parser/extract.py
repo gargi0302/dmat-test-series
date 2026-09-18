@@ -130,13 +130,20 @@ def parse_pdf(
 
         # Answer key text: same file's later pages, or a separate file.
         key_entries: dict[int, dict] = {}
+        key_text = ""
         if same_file and key_start is not None:
             key_text = "\n".join((pdf.pages[i].extract_text() or "") for i in range(key_start, len(pdf.pages)))
             key_entries = ak.parse_answer_key_text(key_text)
         elif not same_file and answer_key_pdf_path is not None:
             with pdfplumber.open(answer_key_pdf_path) as key_pdf:
                 key_text = "\n".join((p.extract_text() or "") for p in key_pdf.pages)
-                key_entries = ak.parse_answer_key_text(key_text)
+            key_entries = ak.parse_answer_key_text(key_text)
+
+        # Per-part answer rows (e.g. "Q Matrix 5 Matrix 6") are keyed by how
+        # many parts a question has, since the same key text is consulted for
+        # every multi-part question in this import but the row shape depends
+        # on the part count.
+        multi_part_key_cache: dict[int, dict[int, list[str]]] = {}
 
         doc = pymupdf.open(questions_pdf_path)
         results: list[ParsedQuestion] = []
@@ -171,25 +178,45 @@ def parse_pdf(
 
             if len(option_groups) > 1:
                 # Multi-part question (e.g. "Matrix 5" + "Matrix 6"), each
-                # part with its own options and its own answer. No known
-                # answer-key format in this codebase carries per-part
-                # answers, so each part's correct_answer is left for manual
-                # review rather than guessed.
+                # part with its own options and its own answer. A per-part
+                # answer-key row (e.g. "5  Option 3  Option 2") resolves each
+                # part independently, positionally matched to the question's
+                # own parts in order; anything a row doesn't cover is left
+                # for manual review rather than guessed.
                 option_type = "mcq"
+                num_parts = len(option_groups)
+                if num_parts not in multi_part_key_cache:
+                    multi_part_key_cache[num_parts] = ak.parse_multi_part_answer_key_text(key_text, num_parts)
+                multi_row = multi_part_key_cache[num_parts].get(qnum)
+
                 parsed_parts = []
+                part_confidences = []
                 for gi, (label, group_regions) in enumerate(option_groups):
                     part_options = _build_options(
                         doc, page, region.page_index, qnum, group_regions,
                         image_out_dir, image_url_prefix, name_suffix=f"_part{gi + 1}",
                     )
+                    part_correct_answer = None
+                    part_detected_raw = None
+                    if multi_row:
+                        part_valid_keys = [o["key"] for o in part_options]
+                        part_correct_answer, part_confidence, part_detected_raw = ak.resolve_answer(
+                            "mcq", part_valid_keys, {"value": multi_row[gi], "variable": None},
+                        )
+                        part_confidences.append(part_confidence)
                     parsed_parts.append(ParsedPart(
                         label=label or f"Part {gi + 1}",
                         options=part_options,
-                        correct_answer=None,
-                        detected_answer_raw=None,
+                        correct_answer=part_correct_answer,
+                        detected_answer_raw=part_detected_raw,
                     ).__dict__)
                 parts = parsed_parts
-                confidence = "medium"  # structure parsed cleanly; answers still need verification
+                if part_confidences and all(c == "high" for c in part_confidences):
+                    confidence = "high"
+                elif multi_row:
+                    confidence = "low"  # a key row was found but didn't cleanly match every part
+                else:
+                    confidence = "medium"  # structure parsed cleanly; answers still need verification
             else:
                 if option_groups:
                     option_type = "mcq"

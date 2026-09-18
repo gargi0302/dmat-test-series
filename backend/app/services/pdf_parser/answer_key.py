@@ -76,6 +76,30 @@ def parse_answer_key_text(text: str) -> dict[int, dict]:
     return candidates[best]
 
 
+def parse_multi_part_answer_key_text(text: str, num_parts: int) -> dict[int, list[str]]:
+    """For a multi-part question (e.g. "Matrix 5" + "Matrix 6"), matches a
+    per-part answer-key row: a question number immediately followed by
+    exactly num_parts option values, in the same left-to-right order as the
+    question's own parts — e.g. "5  Option 3  Option 2  <solving note>" or
+    the bare "5  3  2". Extra columns after the values (a written-out
+    solving idea, etc.) are never mistaken for further part values, because
+    the regex only ever consumes exactly num_parts of them. A row that can't
+    supply all num_parts values for a question is skipped entirely — nothing
+    is ever guessed from a partial row."""
+    if num_parts < 2:
+        return {}
+    value_group = r"(?:Option\s*)?([A-Za-z0-9▲■●★]+)"
+    pattern = re.compile(
+        r"^Q?(\d+)" + (r"\s+" + value_group) * num_parts + r"\b",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    result: dict[int, list[str]] = {}
+    for m in pattern.finditer(text):
+        qnum = int(m.group(1))
+        result.setdefault(qnum, [m.group(i) for i in range(2, num_parts + 2)])
+    return result
+
+
 def resolve_answer(
     option_type: str,
     valid_option_keys: list[str] | None,
@@ -94,6 +118,15 @@ def resolve_answer(
         norm_keys = {k.strip().upper(): k for k in valid_option_keys}
         if value.strip().upper() in norm_keys:
             return norm_keys[value.strip().upper()], "high", value
+        # Fall back to comparing just the option identifier itself, so a
+        # numbered-style key like "Option 3" still matches an answer-key
+        # value spelled as bare "3" (as well as "Option 3") — same option,
+        # looser spelling, still a confident match rather than a guess.
+        value_tail = re.sub(r"^Option\s*", "", value.strip(), flags=re.IGNORECASE).upper()
+        for key in valid_option_keys:
+            key_tail = re.sub(r"^Option\s*", "", key.strip(), flags=re.IGNORECASE).upper()
+            if value_tail and value_tail == key_tail:
+                return key, "high", value
         return None, "low", value
 
     # numeric / text (fill-in) answers
